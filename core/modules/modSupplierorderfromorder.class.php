@@ -64,7 +64,7 @@ class modSupplierorderfromorder extends DolibarrModules
         $this->description = "Module commande fournisseur à partir d'une commande client";
         // Possible values for version are: 'development', 'experimental' or version
 
-        $this->version = '2.6.2';
+        $this->version = '2.8.3';
 		// Url to the file with your last numberversion of this module
 		require_once __DIR__ . '/../../class/techatm.class.php';
 		$this->url_last_version = \supplierorderfromorder\TechATM::getLastModuleVersionUrl($this);
@@ -124,9 +124,9 @@ class modSupplierorderfromorder extends DolibarrModules
         // List of modules id to disable if this one is disabled
         $this->requiredby = array();
         // Minimum version of PHP required by module
-        $this->phpmin = array(5, 3);
+        $this->phpmin = array(7, 0);
         // Minimum version of Dolibarr required by module
-        $this->need_dolibarr_version = array(3, 2);
+        $this->need_dolibarr_version = array(16, 0);
         $this->langfiles = array("supplierorderfromorder@supplierorderfromorder"); // langfiles@mymodule
         // Constants
         // List of particular constants to add when module is enabled
@@ -139,7 +139,7 @@ class modSupplierorderfromorder extends DolibarrModules
         $this->tabs = array();
 
         // Dictionnaries
-        if (! isset($conf->ordersupplierfromorder->enabled)) {
+        if (!isset($conf->ordersupplierfromorder->enabled)) {
             $conf->ordersupplierfromorder=new stdClass();
             $conf->ordersupplierfromorder->enabled = 0;
         }

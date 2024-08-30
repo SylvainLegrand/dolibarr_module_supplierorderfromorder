@@ -25,7 +25,7 @@ function _load_stats_commande_fournisseur($fk_product, $date,$stocktobuy=1,$filt
     $sql.= " AND c.fk_soc = s.rowid";
     $sql.= " AND c.entity = ".$conf->entity;
     $sql.= " AND cd.fk_product = ".$fk_product;
-    $sql.= " AND (c.date_livraison IS NULL OR c.date_livraison<='".$date."') ";
+    $sql.= " AND (c.delivery_date IS NULL OR c.delivery_date <= '".$date."') ";
     if ($filtrestatut != '') $sql.= " AND c.fk_statut in (".$filtrestatut.")";
 
     $result =$db->query($sql);
@@ -52,7 +52,7 @@ function _load_stats_commande_date($fk_product, $date,$filtrestatut='1,2') {
         $sql.= " AND c.fk_soc = s.rowid";
         $sql.= " AND c.entity = ".$conf->entity;
         $sql.= " AND cd.fk_product = ".$fk_product;
-        $sql.= " AND (c.date_livraison IS NULL OR c.date_livraison<='".$date."') ";
+        $sql.= " AND (c.delivery_date IS NULL OR c.delivery_date <='".$date."') ";
         if ($filtrestatut <> '') $sql.= " AND c.fk_statut in (".$filtrestatut.")";
 
         $result =$db->query($sql);
@@ -74,7 +74,8 @@ function getExpedie($fk_product) {
     $sql = "SELECT SUM(ed.qty) as qty";
     $sql.= " FROM ".MAIN_DB_PREFIX."expeditiondet as ed";
     $sql.= " LEFT JOIN ".MAIN_DB_PREFIX."expedition as e ON (e.rowid=ed.fk_expedition)";
-    $sql.= " LEFT JOIN ".MAIN_DB_PREFIX."commandedet as cd ON (ed.fk_origin_line=cd.rowid)";
+	if ((float) DOL_VERSION < 20) $sql.= " LEFT JOIN ".MAIN_DB_PREFIX."commandedet as cd ON (ed.fk_origin_line=cd.rowid)";
+    else $sql.= " LEFT JOIN ".MAIN_DB_PREFIX."commandedet as cd ON (ed.fk_elementdet=cd.rowid)";
     $sql.= " WHERE 1";
     $sql.= " AND e.entity = ".$conf->entity;
     $sql.= " AND cd.fk_product = ".$fk_product;
@@ -215,19 +216,22 @@ function getSupplierOrderAvailable($supplierSocId,$shippingContactId=0,$array_op
 }
 
 /**
- * get or create supplierOrder from orderline
- * @param OrderLine $line
- * @param int $supplierSocId thirdparty id
- * @param int $shippingContactId id of shipping contact
- * @param int $supplierOrderStatus status for supplierOrder to get
+ * Création ou mise à jour de la commande fournisseur selon la conf
+ * getDolGlobalString('SOFO_CREATE_NEW_SUPPLIER_ODER_ANY_TIME')
  *
+ * @param OrderLine $line
+ * @param int $supplierSocId
+ * @param int $shippingContactId
+ * @param int $supplierOrderStatus
+ * @param bool $createCommande
+ * @param bool $fetchCommande
  * @return CommandeFournisseur
  */
-function getSupplierOrderToUpdate($line, $supplierSocId, $shippingContactId, $supplierOrderStatus)
+function getSupplierOrderToUpdate(OrderLine $line, int $supplierSocId, int $shippingContactId, int $supplierOrderStatus, bool $createCommande = false, bool $fetchCommande = false) :CommandeFournisseur
 {
 	dol_include_once('fourn/class/fournisseur.commande.class.php');
 
-	global $db, $user, $conf;
+	global $db, $user, $langs;
 
 	$array_options = array();
 	$CommandeFournisseur = new CommandeFournisseur($db);
@@ -235,39 +239,59 @@ function getSupplierOrderToUpdate($line, $supplierSocId, $shippingContactId, $su
 	$societe = new Societe($db);
 	$res = $societe->fetch($supplierSocId);
 
-	if ($res < 0) return $CommandeFournisseur; // pas de société retourne la commande null
+	if ($res < 0){
+		setEventMessage('NoCreateSupplierOrderMissingSociete', 'errors');
+		return $CommandeFournisseur; // pas de société retourne la commande null
+	}
 
 	// search and get draft supplier order linked
-	$searchSupplierOrder = getLinkedSupplierOrderFromOrder($line->fk_commande,$supplierSocId,$shippingContactId,$supplierOrderStatus);
-	if(empty($searchSupplierOrder))
-	{
-		// search draft supplier order with same critera
-		$restrictToCustomerOrder=0;
-		if(!empty($conf->global->SOFO_USE_RESTRICTION_TO_CUSTOMER_ORDER)){
+	$TSearchSupplierOrder = getLinkedSupplierOrderFromOrder($line->fk_commande, $supplierSocId, $shippingContactId, $supplierOrderStatus);
+	if(empty($TSearchSupplierOrder)) {
+		$restrictToCustomerOrder = 0; // search draft supplier order with same critera
+		if(getDolGlobalString('SOFO_USE_RESTRICTION_TO_CUSTOMER_ORDER')){
 			$restrictToCustomerOrder = $line->fk_commande;
 		}
-
-		$searchSupplierOrder = getSupplierOrderAvailable($supplierSocId,$shippingContactId,$array_options,$restrictToCustomerOrder);
+		$TSearchSupplierOrder = getSupplierOrderAvailable($supplierSocId, $shippingContactId, $array_options, $restrictToCustomerOrder);
 	}
-
-	if(!empty($searchSupplierOrder))
-	{
-		$CommandeFournisseur->fetch($searchSupplierOrder[0]);
+	if (!is_array($TSearchSupplierOrder)) {
+		setEventMessage('NoCreateSupplierOrderErrorSearch', 'errors');
+		return $CommandeFournisseur; // pas de $TSearchSupplierOrder retourne la commande null
 	}
-	else
-	{
+	//======================================================================================================
+	// Section concernant la Conf "Créer une commande fournisseur brouillon pour chaque commande client"
+
+	/**
+	 * Création de commande fournisseur si :
+	 * SI Aucune commande contenue dans $TSearchSupplierOrder
+	 * OU mon parametre de fonction $createCommande est à true et $fetchCommande à false
+	 * OU si ma conf de module SOFO_CREATE_NEW_SUPPLIER_ODER_ANY_TIME "Créer une commande fournisseur brouillon pour chaque commande client" est a TRUE ET que $fetchCommande est à false
+	 */
+	if ((($createCommande && !$fetchCommande ) || empty($TSearchSupplierOrder))
+		|| (!$fetchCommande && getDolGlobalString('SOFO_CREATE_NEW_SUPPLIER_ODER_ANY_TIME'))) {
 		$CommandeFournisseur->socid = $supplierSocId;
 		$CommandeFournisseur->mode_reglement_id = $societe->mode_reglement_supplier_id;
 		$CommandeFournisseur->cond_reglement_id = $societe->cond_reglement_supplier_id;
-		$id = $CommandeFournisseur->create($user);
-		if($id>0)
-		{
-			// add order in linked element
-			$CommandeFournisseur->add_object_linked('commande', $line->fk_commande);
-
+		$res = $CommandeFournisseur->create($user);
+		if ($res){
+			setEventMessage($langs->trans('supplierOrderCreated', $CommandeFournisseur->ref));
 		}
 	}
-
+	/**
+	 * On fetch la dernière commande fournisseur de mon tableau $TSearchSupplierOrder si :
+	 * Si ma conf de module SOFO_CREATE_NEW_SUPPLIER_ODER_ANY_TIME "Créer une commande fournisseur brouillon pour chaque commande client" est à FALSE
+	 * OU mon parametre de fonction $fetchCommande est à true ET SOFO_CREATE_NEW_SUPPLIER_ODER_ANY_TIME est true
+	 */
+	if (!getDolGlobalString('SOFO_CREATE_NEW_SUPPLIER_ODER_ANY_TIME') || ($fetchCommande && getDolGlobalString('SOFO_CREATE_NEW_SUPPLIER_ODER_ANY_TIME'))){
+		$lastValue = end($TSearchSupplierOrder);
+		$res = $CommandeFournisseur->fetch($lastValue);
+	}
+	if ($res) {
+		$CommandeFournisseur->add_object_linked('commande', $line->fk_commande);
+	}else{
+		setEventMessage($langs->trans('supplierOrderNotCreated', $line->product_ref ));
+		dol_syslog(get_class($line)."::getSupplierOrderToUpdate ".$line->error, LOG_ERR);
+	}
+	//======================================================================================================
 	return $CommandeFournisseur;
 
 }
@@ -311,7 +335,7 @@ function updateOrAddlineToSupplierOrder($CommandeFournisseur, $line, $productid,
 
 	// SEARCH in supplier order if same product exist
 	$supplierLineRowidExist = 0 ;
-	if(!empty($CommandeFournisseur->lines) && $conf->global->SOFO_ADD_QUANTITY_RATHER_THAN_CREATE_LINES)
+	if(!empty($CommandeFournisseur->lines) && getDolGlobalInt('SOFO_ADD_QUANTITY_RATHER_THAN_CREATE_LINES') )
 	{
 		foreach ($CommandeFournisseur->lines as $li => $fournLine)
 		{
@@ -357,21 +381,25 @@ function updateOrAddlineToSupplierOrder($CommandeFournisseur, $line, $productid,
 	}
 	else
 	{
-		if($line->fk_product != $productid) $line->fk_product = $productid;
-		$res = $line->fetch_product();
+		// les object sont passés par référence par défaut
+		// l'object line est la ligne de commande initiale
+		// nous sommes en train de modifier cette ligne si nous ne clonons pas celle-ci
+		$lineClone = clone $line;
+		if($lineClone->fk_product != $productid) $lineClone->fk_product = $productid;
+		$res = $lineClone->fetch_product();
 		if($res > 0) {
-			$fk_unit = $line->product->fk_unit;
-			$product_type = $line->product->type;
+			$fk_unit = $lineClone->product->fk_unit;
+			$product_type = $lineClone->product->type;
 		} else {
-			$fk_unit = $line->fk_unit;
-			$product_type = $line->product_type;
+			$fk_unit = $lineClone->fk_unit;
+			$product_type = $lineClone->product_type;
 		}
 		// ADD LINE
 		$ret['return'] = $CommandeFournisseur->addline(
-			$line->desc,
+			$lineClone->desc,
 			$price,
 			$qty,
-			$line->tva_tx,
+			$lineClone->tva_tx,
 			$txlocaltax1=0.0,
 			$txlocaltax2=0.0,
 			$productid,
@@ -381,15 +409,15 @@ function updateOrAddlineToSupplierOrder($CommandeFournisseur, $line, $productid,
 			'HT',
 			0, //$pu_ttc=0.0,
 			$product_type,
-			$line->info_bits,
+			$lineClone->info_bits,
 			false, //$notrigger=false,
 			null, //$date_start=null,
 			null, //$date_end=null,
-			$line->array_options, //$array_options=0,
+			$lineClone->array_options, //$array_options=0,
 			$fk_unit,
 			0,//$pu_ht_devise=0,
 			'commandedet', //$origin= // peut être un jour ça sera géré...
-			$line->id //$origin_id=0 // peut être un jour ça sera géré...
+			$lineClone->id //$origin_id=0 // peut être un jour ça sera géré...
 		);
 	}
 
@@ -614,7 +642,7 @@ function getUnitLabel($fk_unit, $return = 'code')
 function  sofo_nomenclatureProductDeepCrawl($fk_element, $element, $fk_product,$qty = 1, $deep = 0, $maxDeep = 0){
     global $db,$conf;
 
-    $maxDeepConf = empty($conf->global->NOMENCLATURE_MAX_NESTED_LEVEL) ? 50 : $conf->global->NOMENCLATURE_MAX_NESTED_LEVEL;
+    $maxDeepConf = floatval( getDolGlobalString('NOMENCLATURE_MAX_NESTED_LEVEL','50'));
     $maxDeep = !empty($maxDeep)?$maxDeep:$maxDeepConf ;
 
     if($deep>$maxDeep){ return array(); }
@@ -717,7 +745,7 @@ function supplierorderfromorderAdminPrepareHead()
     $head[$h][2] = 'settings';
     $h++;
 
-    if (!empty($conf->nomenclature->enabled)){
+    if (isModEnabled('nomenclature')){
         $head[$h][0] = dol_buildpath("/supplierorderfromorder/admin/dispatch_to_supplier_order_setup.php", 1);
         $head[$h][1] = $langs->trans("Nomenclature");
         $head[$h][2] = 'nomenclature';
