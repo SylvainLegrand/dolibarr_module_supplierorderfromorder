@@ -1,9 +1,7 @@
 <?php
 
-if(is_file('../main.inc.php'))$dir = '../';
-else  if(is_file('../../../main.inc.php'))$dir = '../../../';
-else  if(is_file('../../../../main.inc.php'))$dir = '../../../../';
-else  if(is_file('../../../../../main.inc.php'))$dir = '../../../../../';
+if(is_file('../main.inc.php')) $dir = '../';
+else  if(is_file('../../../main.inc.php')) $dir = '../../../';
 else $dir = '../../';
 
 if(!defined('INC_FROM_DOLIBARR') && defined('INC_FROM_CRON_SCRIPT')) {
@@ -21,4 +19,3 @@ if(!defined('DB_HOST') && !empty($dolibarr_main_db_host)) {
 	define('DB_PASS',$dolibarr_main_db_pass);
 	define('DB_DRIVER',$dolibarr_main_db_type);
 }
-	

@@ -8,7 +8,7 @@ dol_include_once('fourn/class/fournisseur.commande.class.php');
 dol_include_once('fourn/class/fournisseur.product.class.php');
 dol_include_once('supplierorderfromorder/lib/function.lib.php');
 
-if(empty($user->rights->fournisseur->commande->creer)) accessforbidden();
+if(!$user->hasRight('fournisseur', 'commande', 'creer')) accessforbidden();
 
 $langs->loadLangs(array(
      'admin'
@@ -85,9 +85,12 @@ if (empty($reshook))
 	{
 
 
-	    $saveconf_SUPPLIER_ORDER_WITH_NOPRICEDEFINED = !empty($conf->global->SUPPLIER_ORDER_WITH_NOPRICEDEFINED)?$conf->global->SUPPLIER_ORDER_WITH_NOPRICEDEFINED:0 ;
+	    $saveconf_SUPPLIER_ORDER_WITH_NOPRICEDEFINED = floatval(getDolGlobalString('SUPPLIER_ORDER_WITH_NOPRICEDEFINED','0')) ;
 	    $conf->global->SUPPLIER_ORDER_WITH_NOPRICEDEFINED = 1;
 	    $error = 0;
+		$shippingContactId = 0;
+		$createCommande = false;
+		$fetchCommande = false;
 
 	    $TLinesToCreate = $TNomenclatureLinesToCreate = array();
 
@@ -141,12 +144,9 @@ if (empty($reshook))
 
                 if(empty($searchSupplierOrderLine))
                 {
-
-                    $shippingContactId = 0;
                     if(!empty($TShipping[$line->id])){
                         $shippingContactId = $TShipping[$line->id];
                     }
-
                     $CommandeFournisseur = getSupplierOrderToUpdate($line, $supplierSocId, $shippingContactId, CommandeFournisseur::STATUS_DRAFT);
 		    if(empty($CommandeFournisseur->fk_project) && !empty($origin->fk_project)) $CommandeFournisseur->setProject($origin->fk_project);
                     // Vérification de la commande
@@ -300,9 +300,17 @@ if (empty($reshook))
                     if(empty($searchSupplierOrderLine))
                     {
 
-
-                        $shippingContactId = 0; // Les produits issue d'une nomenclature ne doivent pas partir dirrectement chez un client (pour l'instant en tout cas)
-						$CommandeFournisseur = getSupplierOrderToUpdate($line, $supplierSocId, $shippingContactId, CommandeFournisseur::STATUS_DRAFT);
+						$shippingContactId = 0;
+						if (getDolGlobalString('SOFO_CREATE_NEW_SUPPLIER_ODER_ANY_TIME')) {
+							// Si ma conf est activé, je me sert de $createCommande pour créer ma commande
+							$createCommande = true;
+						}
+						$CommandeFournisseur = getSupplierOrderToUpdate($line, $supplierSocId, $shippingContactId, CommandeFournisseur::STATUS_DRAFT, $createCommande ?? false, $fetchCommande ?? false);
+						if (getDolGlobalString('SOFO_CREATE_NEW_SUPPLIER_ODER_ANY_TIME')){
+							// Une fois que la commande est créer j'initialise ma variable $fetchCommande à true pour fetch la commande qui a été créer grace $createCommande = true;
+							// L'objectif est de faire une seule fois la création de commande lors du passage dans le foreach
+							$fetchCommande = true;
+						}
 
 						// Vérification de la commande
                         if(empty($CommandeFournisseur->id))
@@ -466,7 +474,6 @@ if (empty($reshook))
 								$commandeFournisseurLigne = new CommandeFournisseurLigne($db);
 								$commandeFournisseurLigne->fetch($res);
 								$commandeFournisseurLigne->add_object_linked('commandedet', $lineId);
-
 								$commandeFournisseurLigne->add_object_linked('nomenclaturedet', $infos['nomenclaturedetId']);
 
 								// sauvegarde des infos pour l'affichage du resultat
@@ -559,7 +566,7 @@ $helpurl = 'EN:Module_Stocks_En|FR:Module_Stock|';
 $helpurl .= 'ES:M&oacute;dulo_Stocks';
 llxHeader('', $langs->trans('Dispath'), $helpurl, 'commercial', 0, 0, '', array('/supplierorderfromorder/css/style.css'));
 $includeProduct ='';
-if (isset($conf->global->INCLUDE_PRODUCT_LINES_WITH_ADEQUATE_STOCK) && ($conf->global->INCLUDE_PRODUCT_LINES_WITH_ADEQUATE_STOCK == 1)) {
+if (getDolGlobalInt('INCLUDE_PRODUCT_LINES_WITH_ADEQUATE_STOCK') == 1) {
 	$includeProduct = '&show_stock_no_need=yes';
 }
 
@@ -620,6 +627,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
 
     print '<input type="hidden" name="from" value="'.$from.'" />';
     print '<input type="hidden" name="fromid" value="'.$fromid.'" />';
+    print '<input type="hidden" name="token" value="'.newToken().'" />';
 
     print '<table width="100%" class="noborder noshadow" >';
 
@@ -628,7 +636,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
     print '   <tr class="liste_titre" >';
     print '       <th >' . $langs->trans('Description') . '</th>';
     print '       <th class="center" >' . $langs->trans('Commande client') . '</th>';
-    if (!empty($conf->stock->enabled)){
+    if (isModEnabled('stock')){
         $totalNbCols++;
         print '       <th class="center" >' . $langs->trans('Stock_reel') . '</th>';
         $totalNbCols++;
@@ -637,7 +645,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
     print '       <th >' . $form->textwithtooltip($langs->trans('QtyToOrder'), $langs->trans('QtyToOrderHelp'),2,1,img_help(1,'')) . '</th>';
     print '       <th class="left" >' . $langs->trans('Supplier') . '</th>';
 
-    if(!empty($conf->global->SOFO_USE_DELIVERY_CONTACT)){
+    if(getDolGlobalString('SOFO_USE_DELIVERY_CONTACT')){
         $totalNbCols++;
         print '       <th  >' . $form->textwithtooltip($langs->trans('Delivery'), $langs->trans('DeliveryHelp'),2,1,img_help(1,'')) . '<br/><small style="cursor:pointer;" id="emptydelivery" ><i class="fa fa-truck" ></i>Vider</small></th>';
     }
@@ -786,7 +794,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
                 // QTY
                 print '<td class="center col-qtyordered"  ><strong title="'.$langs->trans('clicToReplaceQty').'" class="addvalue2target classfortooltip" style="cursor:pointer" data-value="'.$line->qty.'" data-target="#qty-'.$line->id.'"  >'.$line->qty.'</strong></td>';
 
-                if (!empty($conf->stock->enabled)){
+                if (isModEnabled('stock')){
                     // STOCK REEL
                     print '<td  class="center col-realstock">';
                     if(!empty($line->fk_product) && $line->product_type == Product::TYPE_PRODUCT)
@@ -818,7 +826,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
                 if($line->product_type == Product::TYPE_PRODUCT)
                 {
 
-                    if (!empty($conf->stock->enabled)){
+                    if (isModEnabled('stock')){
 
                         if( $stocktheoBeforeOrder - $line->qty >= 0){
                             $qty2Order = 0;
@@ -846,7 +854,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
                 }
 
                 print '<td class="center col-qtytoorder" >';
-                if(empty($conf->global->SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE)){
+                if(!getDolGlobalString('SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE')){
                     print '<input id="qty-'.$line->id.'" class="qtyform col-qtytoorder" data-lineid="'.$line->id.'" type="number" step="any" name="qty['.$line->id.']" value="'.$qty2Order.'" min="0"  >';
                 }
                 print '</td>';
@@ -859,7 +867,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
                  */
 
                 print '<td class="col-fourn" >';
-                if(empty($conf->global->SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE))
+                if(!getDolGlobalString('SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE'))
                 {
 
                     if(!empty($line->fk_product))
@@ -891,7 +899,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
                 // Additionnal options for nomenclature
                 if(!empty($Tnomenclature))
                 {
-                    if(empty($conf->global->SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE)){
+                    if(!getDolGlobalString('SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE')){
                         print '<i class="sofo_pointeur fa fa-plus classfortooltip moreoptionbtn" data-target="#moreoption'.$line->id.'"  title="'.$langs->trans('MoreOptions').'"  ></i>';
                         print '<div class="moreoptionblock" id="moreoption'.$line->id.'" >';
                         print '<fieldset><legend>'.$langs->trans('Nomenclature').'</legend>';
@@ -901,7 +909,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
                     $selectFournForm = $form->select_company(GETPOST($selectFournFormName,'int'),$selectFournFormName, '',1,'supplier', $forcecombo=0, array(), 0, 'minwidth100', '', '', 2);
                     print '<div>'.$selectFournForm.' '.$form->textwithtooltip( $langs->trans('ForceFourn') , $langs->trans('ForceFournHelp'),2,1,img_help(1,'')) .'</div>';
 
-                    if(empty($conf->global->SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE)){
+                    if(!getDolGlobalString('SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE')){
                         print '</fieldset>';
                         print '</div>';
                     }
@@ -915,11 +923,11 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
                 /*
                  * SELECTION CONTACT DE LIVRAISON
                  */
-                if(!empty($conf->global->SOFO_USE_DELIVERY_CONTACT))
+                if(getDolGlobalString('SOFO_USE_DELIVERY_CONTACT'))
                 {
                     print '<td>';
 
-                    if(empty($conf->global->SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE)){
+                    if(!getDolGlobalString('SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE')){
                         if(isset($TShipping[$line->id])){
                             $select_shipping_dest_filter = $TShipping[$line->id];
                         }
@@ -956,7 +964,7 @@ if( ($action === 'prepare' || $action == 'showdispatchresult')  && !empty($origi
                         $check = false;
                     }
 
-                    if(empty($conf->global->SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE)){
+                    if(!getDolGlobalString('SOFO_DISABLE_ORDER_POSIBILITY_TO_PRODUCT_WITH_NOMENCLATURE')){
                         print '<input id="linecheckbox'.$line->id.'" class="checkboxToggle" type="checkbox" '.($check?'checked':'').' name="checked['.$line->id.']" value="'.$line->id.'">';
                     }
                 }
@@ -1217,7 +1225,7 @@ function _nomenclatureViewToHtml($line, $TNomenclatureLines, $nomI = 0, $overrid
 
 				$print .=  '</td>';
 			}
-			else if ($productPart['children'] && !empty($conf->global->SOFO_VIEW_SUBNOMENCLATURE8LINES))
+			else if ($productPart['children'] && getDolGlobalString('SOFO_VIEW_SUBNOMENCLATURE8LINES'))
 			{
 				$print .= '<td class="center col-qtyordered" >';
 				$print .= '<strong title="' . $langs->trans('clicToReplaceQty') . '" class="addvalue2target classfortooltip" style="cursor:pointer" data-value="' . $productPart['infos']['qty'] . '" data-target="#qty-' . $line->id . '-n' . $nomenclatureI . '"  >' . $productPart['infos']['qty'] . '</strong>';
@@ -1236,12 +1244,12 @@ function _nomenclatureViewToHtml($line, $TNomenclatureLines, $nomI = 0, $overrid
 				$print .= '</td>';
 
 
-				if (!empty($conf->global->SOFO_FILL_QTY_NOMENCLATURE)) {
+				if (getDolGlobalString('SOFO_FILL_QTY_NOMENCLATURE')) {
 					$qty2Order = $productPart['infos']['qty'];
 				}
 
 
-				if (!empty($conf->stock->enabled)) {
+				if (isModEnabled('stock')) {
 
 					// STOCK REEL
 					$colspan--;
@@ -1330,7 +1338,7 @@ function _nomenclatureViewToHtml($line, $TNomenclatureLines, $nomI = 0, $overrid
 			}
             $print.= '</tr>';
 
-			if ($productPart['children'] && !empty($conf->global->SOFO_VIEW_SUBNOMENCLATURE8LINES))
+			if ($productPart['children'] && getDolGlobalString('SOFO_VIEW_SUBNOMENCLATURE8LINES'))
 			{
 				$print .= _nomenclatureViewToHtml($line, $productPart['children'], $nomenclatureI, $param, $decallage +1);
 			}

@@ -45,12 +45,14 @@ class TSOFO {
 
 		while($obj_availability = $db->fetch_object($res_av)) {
 
-			if(!empty($obj_availability->delivery_time_days))$nb_day = $obj_availability->delivery_time_days;
+			if(!empty($obj_availability->delivery_time_days)) $nb_day = $obj_availability->delivery_time_days;
 			else {
-				$av_code = $form->cache_availability[$obj_availability->fk_availability] ;
-				$nb_day = self::getDayFromAvailabilityCode($av_code['code']);
+                if (!empty($obj_availability->fk_availability)) {
+                    $av_code = $form->cache_availability[$obj_availability->fk_availability] ;
+                    $nb_day = self::getDayFromAvailabilityCode($av_code['code']);
+                }
 			}
-			if(($min === false || $nb_day<$min )
+			if( ($min === false ||  (!empty($nb_day) && $nb_day <$min))
 				&& (!$only_with_delai || $nb_day>0)) $min = $nb_day;
 
 		}
@@ -115,7 +117,7 @@ class TSOFO {
 							$num == 1
 						||  ($selected_supplier > 0 && $objp->fk_soc == $selected_supplier)
 						||  (
-								! empty($conf->global->SOFO_PRESELECT_SUPPLIER_PRICE_FROM_LINE_BUY_PRICE)
+								getDolGlobalString('SOFO_PRESELECT_SUPPLIER_PRICE_FROM_LINE_BUY_PRICE')
 							&&	$selected_supplier <= 0
 							&&	$selected_price_ht > 0
 							&&	$selected_price_ht == $objp->unitprice * (1 - $objp->remise_percent / 100)
@@ -125,7 +127,7 @@ class TSOFO {
 					}
 					$opt.= '>'.$objp->name.' - '.$objp->ref_fourn.' - ';
 
-					if (!empty($conf->dynamicprices->enabled) && !empty($objp->fk_supplier_price_expression)) {
+					if (isModEnabled('dynamicprices') && !empty($objp->fk_supplier_price_expression)) {
 						$prod_supplier = new ProductFournisseur($db);
 						$prod_supplier->product_fourn_price_id = $objp->idprodfournprice;
 						$prod_supplier->id = $productid;
